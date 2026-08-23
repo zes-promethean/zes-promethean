@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trip Persona Router & 3D Drive Simulator</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet CSS for Real Map view -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body {
+            background-color: #0b0e14;
+            color: #f3f4f6;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .grid-canvas {
+            background-image: 
+                linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        /* Custom road perspective container */
+        .road-perspective {
+            perspective: 800px;
+        }
+        .road-plane {
+            transform: rotateX(60deg);
+            transform-style: preserve-3d;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-3 md:p-6">
+
+    <div class="w-full max-w-5xl bg-[#131620] border border-gray-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+        
+        <!-- Header Section -->
+        <div class="px-6 py-4 border-b border-gray-800 flex flex-col md:flex-row justify-between items-center gap-3">
+            <div>
+                <h1 class="text-xl font-bold tracking-wide text-gray-100 flex items-center gap-2">
+                    <span>Trip Persona Router</span>
+                    <span id="badge-mode" class="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">Vector Sim</span>
+                </h1>
+                <p id="mode-subtitle" class="text-xs text-gray-400 mt-0.5">Bhubaneswar ➔ Cuttack • Select persona route & launch live drive</p>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <button onclick="toggleDriveMode()" id="drive-mode-btn" class="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/40 rounded-xl text-xs font-semibold tracking-wide transition flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <span id="drive-btn-text">Start 3D Drive Simulator</span>
+                </button>
+                <button onclick="resetView()" class="p-2 rounded-xl hover:bg-gray-800 text-gray-400 hover:text-white transition" title="Reset View">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- MAIN CONTAINER: Switches between Grid Sim, 3D Drive, and Real Map -->
+        <div class="relative w-full h-[400px] md:h-[460px] overflow-hidden border-b border-gray-800 bg-[#090b10]">
+            
+            <!-- VIEW 1: VECTOR SIMULATION GRID -->
+            <div id="simulation-view" class="absolute inset-0 grid-canvas flex items-center justify-center">
+                <svg id="route-svg" class="absolute inset-0 w-full h-full" viewBox="0 0 800 450" preserveAspectRatio="xMidYMid meet">
+                    <!-- Elliptic Orbit Guide Lines -->
+                    <ellipse cx="400" cy="225" rx="320" ry="120" fill="none" stroke="rgba(255,255,255,0.06)" stroke-dasharray="4 4" stroke-width="1.5"></ellipse>
+                    <ellipse cx="400" cy="225" rx="260" ry="85" fill="none" stroke="rgba(255,255,255,0.04)" stroke-dasharray="3 3" stroke-width="1"></ellipse>
+
+                    <!-- Inactive Route Paths -->
+                    <path id="path-routeD" d="M 150 250 Q 380 60 650 180" fill="none" stroke="#ff33ff" stroke-opacity="0.2" stroke-width="3"></path>
+                    <path id="path-routeC" d="M 150 250 Q 400 180 650 180" fill="none" stroke="#3333ff" stroke-opacity="0.2" stroke-width="3"></path>
+                    <path id="path-routeB" d="M 150 250 Q 420 370 650 180" fill="none" stroke="#33ff33" stroke-opacity="0.2" stroke-width="3"></path>
+                    <path id="path-routeA" d="M 150 250 Q 400 210 650 180" fill="none" stroke="#ff3333" stroke-opacity="0.2" stroke-width="3"></path>
+
+                    <!-- Active Route Highlight -->
+                    <path id="active-route-line" d="M 150 250 Q 400 210 650 180" fill="none" stroke="#ff3333" stroke-width="5" stroke-linecap="round" class="transition-all duration-500"></path>
+
+                    <!-- POI Reward Scatter Nodes -->
+                    <g id="poi-nodes"></g>
+
+                    <!-- Bhubaneswar Start Node -->
+                    <g transform="translate(150, 250)">
+                        <circle r="12" fill="#22c55e" fill-opacity="0.25"></circle>
+                        <circle r="6" fill="#22c55e" stroke="#ffffff" stroke-width="2"></circle>
+                        <text x="-35" y="28" fill="#e5e7eb" font-size="12" font-weight="600">Bhubaneswar</text>
+                        <text x="-15" y="42" fill="#9ca3af" font-size="9">ORIGIN</text>
+                    </g>
+
+                    <!-- Cuttack End Node -->
+                    <g transform="translate(650, 180)">
+                        <circle r="12" fill="#3b82f6" fill-opacity="0.25"></circle>
+                        <circle r="6" fill="#3b82f6" stroke="#ffffff" stroke-width="2"></circle>
+                        <text x="-25" y="-16" fill="#e5e7eb" font-size="12" font-weight="600">Cuttack</text>
+                        <text x="-25" y="-28" fill="#9ca3af" font-size="9">DESTINATION</text>
+                    </g>
+                </svg>
+            </div>
+
+            <!-- VIEW 2: 3D MOVING CAR & REWARD POPUP SIMULATOR (Hidden initially) -->
+            <div id="drive-3d-view" class="absolute inset-0 hidden bg-gradient-to-b from-slate-950 via-slate-900 to-indigo-950 flex flex-col items-center justify-center overflow-hidden road-perspective">
+                <!-- Moving Horizon / Sky -->
+                <div class="absolute top-0 inset-x-0 h-32 bg-gradient-to-b from-sky-950/40 to-transparent flex justify-between px-8 pt-4">
+                    <div class="text-xs font-mono text-indigo-400 tracking-wider">AUTONOMOUS PATH GUIDANCE // 3D RENDER</div>
+                    <div id="drive-progress-text" class="text-xs font-mono text-emerald-400">PROGRESS: 0%</div>
+                </div>
+
+                <!-- 3D Perspective Road Plane -->
+                <div class="relative w-full h-full flex items-center justify-center road-plane">
+                    <!-- Road Surface -->
+                    <div class="w-64 md:w-96 h-[800px] bg-slate-900 border-x-4 border-dashed border-slate-600 relative overflow-hidden shadow-2xl">
+                        <!-- Moving center stripe lines -->
+                        <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-2 bg-yellow-400/80"></div>
+                        
+                        <!-- Dynamic POI Reward Item spawning on road -->
+                        <div id="active-reward-banner" class="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 transition-all duration-300 opacity-0 scale-75">
+                            <div class="px-4 py-2 bg-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-2xl border-2 border-white flex items-center gap-2 animate-bounce">
+                                <span id="reward-icon">⛽</span>
+                                <span id="reward-name">Fuel Station Detected</span>
+                            </div>
+                        </div>
+
+                        <!-- 3D Car Model (Moving forward) -->
+                        <div id="simulated-car" class="absolute bottom-16 left-1/2 -translate-x-1/2 w-14 h-24 bg-gradient-to-t from-red-600 to-red-500 rounded-xl shadow-2xl border-2 border-red-300 flex flex-col items-center justify-between py-2">
+                            <div class="w-8 h-3 bg-slate-900 rounded-sm"></div> <!-- Windshield -->
+                            <div class="w-full flex justify-between px-1">
+                                <div class="w-2 h-4 bg-yellow-300 rounded-full"></div>
+                                <div class="w-2 h-4 bg-yellow-300 rounded-full"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Drive Controls Overlay -->
+                <div class="absolute bottom-4 inset-x-6 flex justify-between items-center bg-slate-900/90 backdrop-blur-md px-5 py-3 rounded-2xl border border-slate-700 shadow-xl">
+                    <div class="flex items-center gap-3">
+                        <button onclick="toggleDrivePlay()" id="play-pause-btn" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition">Pause</button>
+                        <span id="current-reward-status" class="text-xs text-amber-300 font-medium">Cruise Control Active...</span>
+                    </div>
+                    <div class="text-xs text-slate-400">Speed: <span class="text-white font-mono font-bold">65 km/h</span></div>
+                </div>
+            </div>
+
+            <!-- VIEW 3: REAL LEAFLET MAP (Hidden initially) -->
+            <div id="real-map-view" class="absolute inset-0 hidden">
+                <div id="leaflet-map" class="w-full h-full"></div>
+            </div>
+
+            <!-- Floating Route Selector Buttons Overlay -->
+            <div class="absolute bottom-4 left-4 right-4 md:left-auto md:right-4 md:top-4 md:bottom-auto flex md:flex-col gap-2 bg-[#161a26]/90 backdrop-blur-md p-2 rounded-2xl border border-gray-700/80 shadow-2xl z-10">
+                <button onclick="selectRoute('routeA')" id="btn-routeA" class="flex-1 md:flex-none px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition text-left border-l-4 border-[#ff3333] bg-gray-800 text-white shadow">
+                    Road A: Fastest
+                </button>
+                <button onclick="selectRoute('routeB')" id="btn-routeB" class="flex-1 md:flex-none px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition text-left border-l-4 border-[#33ff33] hover:bg-gray-800/60 text-gray-400">
+                    Road B: Max Rewards
+                </button>
+                <button onclick="selectRoute('routeC')" id="btn-routeC" class="flex-1 md:flex-none px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition text-left border-l-4 border-[#3333ff] hover:bg-gray-800/60 text-gray-400">
+                    Road C: Balanced
+                </button>
+                <button onclick="selectRoute('routeD')" id="btn-routeD" class="flex-1 md:flex-none px-3 py-2 rounded-xl text-xs font-semibold tracking-wide transition text-left border-l-4 border-[#ff33ff] hover:bg-gray-800/60 text-gray-400">
+                    Road D: Scenic
+                </button>
+            </div>
+        </div>
+
+        <!-- Bottom Telemetry Stats Bar & Confirm Action -->
+        <div class="flex flex-col md:flex-row items-center justify-between px-6 py-5 bg-[#131620] gap-4">
+            <div class="grid grid-cols-3 divide-x divide-gray-800 text-center w-full md:w-auto flex-1">
+                <div class="px-4">
+                    <p class="text-[10px] uppercase tracking-widest text-gray-500 font-medium mb-1">Estimated Time</p>
+                    <p id="stat-time" class="text-lg md:text-xl font-bold text-gray-100">45 mins</p>
+                </div>
+                <div class="px-4">
+                    <p class="text-[10px] uppercase tracking-widest text-gray-500 font-medium mb-1">Total Distance</p>
+                    <p id="stat-dist" class="text-lg md:text-xl font-bold text-gray-100">28 km</p>
+                </div>
+                <div class="px-4">
+                    <p class="text-[10px] uppercase tracking-widest text-gray-500 font-medium mb-1">POI Rewards</p>
+                    <p id="stat-rewards" class="text-lg md:text-xl font-bold text-amber-400">3 POIs</p>
+                </div>
+            </div>
+
+            <!-- Confirm / Shift Button -->
+            <button id="confirm-btn" onclick="confirmRouteToMap()" class="w-full md:w-auto px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold rounded-xl shadow-lg transition flex items-center justify-center gap-2">
+                <span>Shift to Live Leaflet Map</span>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
+            </button>
+        </div>
+
+    </div>
+
+    <!-- Leaflet JS Library -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Route Datasets with simulation coordinates, GPS path, and rewards with icons/names
+        const routesData = {
+            routeA: {
+                name: "NH-16 Highway (Fastest)",
+                time: "45 mins",
+                distance: "28 km",
+                rewardsCount: "3 POIs",
+                color: "#ff3333",
+                path: "M 150 250 Q 400 210 650 180",
+                gpsPath: [
+                    [20.2961, 85.8245], [20.3200, 85.8500], [20.3700, 85.8904], [20.4200, 85.9000], [20.4625, 85.8830]
+                ],
+                pois: [
+                    { x: 350, y: 215, type: "hospital", name: "Highway Trauma Center", icon: "🏥", coords: [20.3700, 85.8904] },
+                    { x: 270, y: 230, type: "mechanic", name: "NH Auto Repair", icon: "🔧", coords: [20.3200, 85.8500] },
+                    { x: 500, y: 195, type: "food", name: "Dhaba Express", icon: "🍲", coords: [20.4200, 85.9000] }
+                ]
+            },
+            routeB: {
+                name: "Nandankanan - Trisulia (Max Rewards)",
+                time: "65 mins",
+                distance: "32 km",
+                rewardsCount: "5 POIs",
+                color: "#33ff33",
+                path: "M 150 250 Q 420 370 650 180",
+                gpsPath: [
+                    [20.2961, 85.8245], [20.3550, 85.8180], [20.3950, 85.8250], [20.4400, 85.8500], [20.4625, 85.8830]
+                ],
+                pois: [
+                    { x: 300, y: 310, type: "hospital", name: "KIMS Hospital", icon: "🏥", coords: [20.3550, 85.8180] },
+                    { x: 360, y: 335, type: "food", name: "Patia Food Court", icon: "☕", coords: [20.3600, 85.8200] },
+                    { x: 230, y: 280, type: "mall", name: "Esplanade Mall", icon: "🛍️", coords: [20.3000, 85.8300] },
+                    { x: 450, y: 340, type: "mechanic", name: "City Garage", icon: "🔧", coords: [20.3950, 85.8250] },
+                    { x: 550, y: 270, type: "food", name: "Riverview Cafe", icon: "🍰", coords: [20.4400, 85.8500] }
+                ]
+            },
+            routeC: {
+                name: "Khandagiri Bypass (Balanced)",
+                time: "55 mins",
+                distance: "35 km",
+                rewardsCount: "2 POIs",
+                color: "#3333ff",
+                path: "M 150 250 Q 400 180 650 180",
+                gpsPath: [
+                    [20.2961, 85.8245], [20.2600, 85.7800], [20.3500, 85.7500], [20.4200, 85.8000], [20.4625, 85.8830]
+                ],
+                pois: [
+                    { x: 250, y: 210, type: "food", name: "Bypass Dhaba", icon: "🍲", coords: [20.2600, 85.7800] },
+                    { x: 400, y: 180, type: "mechanic", name: "Highway Assist", icon: "🔧", coords: [20.3500, 85.7500] }
+                ]
+            },
+            routeD: {
+                name: "Banki Riverside (Scenic)",
+                time: "90 mins",
+                distance: "45 km",
+                rewardsCount: "0 POIs",
+                color: "#ff33ff",
+                path: "M 150 250 Q 380 60 650 180",
+                gpsPath: [
+                    [20.2961, 85.8245], [20.3000, 85.6500], [20.4000, 85.6000], [20.4500, 85.7500], [20.4625, 85.8830]
+                ],
+                pois: []
+            }
+        };
+
+        let activeRouteKey = 'routeA';
+        let currentMode = 'sim'; // 'sim' | 'drive' | 'map'
+        
+        // 3D Drive Simulation Variables
+        let driveProgress = 0; // 0 to 100
+        let isPlayingDrive = true;
+        let driveInterval = null;
+
+        // Leaflet variables
+        let leafletMap = null;
+        let currentRealPolyline = null;
+        let realPoiLayer = null;
+
+        function selectRoute(routeKey) {
+            activeRouteKey = routeKey;
+            const data = routesData[routeKey];
+
+            // 1. Update Grid Simulation Line & Stats
+            const activeLine = document.getElementById('active-route-line');
+            activeLine.setAttribute('d', data.path);
+            activeLine.setAttribute('stroke', data.color);
+
+            document.getElementById('stat-time').innerText = data.time;
+            document.getElementById('stat-dist').innerText = data.distance;
+            document.getElementById('stat-rewards').innerText = data.rewardsCount;
+
+            // Highlight selected button in sidebar
+            ['routeA', 'routeB', 'routeC', 'routeD'].forEach(key => {
+                const btn = document.getElementById(`btn-${key}`);
+                if (key === routeKey) {
+                    btn.classList.add('bg-gray-800', 'text-white');
+                    btn.classList.remove('hover:bg-gray-800/60', 'text-gray-400');
+                } else {
+                    btn.classList.remove('bg-gray-800', 'text-white');
+                    btn.classList.add('hover:bg-gray-800/60', 'text-gray-400');
+                }
+            });
+
+            // Render POI nodes on grid
+            const poiGroup = document.getElementById('poi-nodes');
+            poiGroup.innerHTML = '';
+            data.pois.forEach(poi => {
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', poi.x);
+                circle.setAttribute('cy', poi.y);
+                circle.setAttribute('r', '6');
+                circle.setAttribute('fill', '#f59e0b');
+                circle.setAttribute('stroke', '#000');
+                circle.setAttribute('stroke-width', '1.5');
+                
+                const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                title.textContent = `${poi.name} (${poi.type})`;
+                circle.appendChild(title);
+                poiGroup.appendChild(circle);
+            });
+
+            // Reset drive progress if in drive mode
+            driveProgress = 0;
+
+            if (currentMode === 'map' && leafletMap) {
+                updateRealMapRoute();
+            }
+        }
+
+        function toggleDriveMode() {
+            const simView = document.getElementById('simulation-view');
+            const driveView = document.getElementById('drive-3d-view');
+            const mapView = document.getElementById('real-map-view');
+            const badge = document.getElementById('badge-mode');
+            const subtitle = document.getElementById('mode-subtitle');
+            const btnText = document.getElementById('drive-btn-text');
+            const confirmBtn = document.getElementById('confirm-btn');
+
+            if (currentMode === 'sim') {
+                // Switch to 3D Drive Mode
+                currentMode = 'drive';
+                simView.classList.add('hidden');
+                driveView.classList.remove('hidden');
+                mapView.classList.add('hidden');
+                badge.innerText = "3D Drive Simulator";
+                badge.className = "text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                subtitle.innerText = "Simulating real-time path progress & reward detection triggers";
+                btnText.innerText = "Switch to Vector Sim";
+                confirmBtn.innerHTML = `<span>Shift to Live Leaflet Map</span> <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>`;
+                confirmBtn.setAttribute('onclick', 'confirmRouteToMap()');
+
+                startDriveSimulator();
+            } else if (currentMode === 'drive') {
+                // Switch back to Sim
+                stopDriveSimulator();
+                currentMode = 'sim';
+                simView.classList.remove('hidden');
+                driveView.classList.add('hidden');
+                mapView.classList.add('hidden');
+                badge.innerText = "Vector Sim";
+                badge.className = "text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30";
+                subtitle.innerText = "Bhubaneswar ➔ Cuttack • Select persona route & launch live drive";
+                btnText.innerText = "Start 3D Drive Simulator";
+            } else if (currentMode === 'map') {
+                stopDriveSimulator();
+                currentMode = 'sim';
+                simView.classList.remove('hidden');
+                driveView.classList.add('hidden');
+                mapView.classList.add('hidden');
+                badge.innerText = "Vector Sim";
+                badge.className = "text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30";
+                subtitle.innerText = "Bhubaneswar ➔ Cuttack • Select persona route & launch live drive";
+                btnText.innerText = "Start 3D Drive Simulator";
+                confirmBtn.innerHTML = `<span>Shift to Live Leaflet Map</span> <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>`;
+                confirmBtn.setAttribute('onclick', 'confirmRouteToMap()');
+            }
+        }
+
+        function confirmRouteToMap() {
+            stopDriveSimulator();
+            currentMode = 'map';
+            document.getElementById('simulation-view').classList.add('hidden');
+            document.getElementById('drive-3d-view').classList.add('hidden');
+            document.getElementById('real-map-view').classList.remove('hidden');
+            document.getElementById('badge-mode').innerText = "Live OpenStreetMap";
+            document.getElementById('badge-mode').className = "text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30";
+            document.getElementById('mode-subtitle').innerText = "Live GPS integration running active route bounds";
+            document.getElementById('drive-btn-text').innerText = "Start 3D Drive Simulator";
+            
+            const confirmBtn = document.getElementById('confirm-btn');
+            confirmBtn.innerHTML = `<span>Switch Back to Simulation</span> <svg class="w-4 h-4 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>`;
+            confirmBtn.setAttribute('onclick', 'resetView()');
+
+            if (!leafletMap) {
+                leafletMap = L.map('leaflet-map').setView([20.3800, 85.8500], 11);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '© OpenStreetMap contributors © CARTO'
+                }).addTo(leafletMap);
+
+                L.marker([20.2961, 85.8245]).addTo(leafletMap).bindPopup("<b>Bhubaneswar (Origin)</b>");
+                L.marker([20.4625, 85.8830]).addTo(leafletMap).bindPopup("<b>Cuttack (Destination)</b>");
+
+                realPoiLayer = L.layerGroup().addTo(leafletMap);
+            }
+
+            updateRealMapRoute();
+        }
+
+        function updateRealMapRoute() {
+            const data = routesData[activeRouteKey];
+            if (currentRealPolyline) leafletMap.removeLayer(currentRealPolyline);
+            realPoiLayer.clearLayers();
+
+            currentRealPolyline = L.polyline(data.gpsPath, {
+                color: data.color,
+                weight: 6,
+                opacity: 0.9
+            }).addTo(leafletMap);
+
+            leafletMap.fitBounds(currentRealPolyline.getBounds(), { padding: [50, 50] });
+
+            data.pois.forEach(poi => {
+                let marker = L.circleMarker(poi.coords, {
+                    radius: 8, fillColor: "#f59e0b", color: "#000", weight: 1, fillOpacity: 0.9
+                });
+                marker.bindPopup(`<b>${poi.icon} ${poi.name}</b><br>Category: ${poi.type}`);
+                realPoiLayer.addLayer(marker);
+            });
+        }
+
+        function startDriveSimulator() {
+            if (driveInterval) clearInterval(driveInterval);
+            driveProgress = 0;
+            isPlayingDrive = true;
+            document.getElementById('play-pause-btn').innerText = "Pause";
+
+            driveInterval = setInterval(() => {
+                if (!isPlayingDrive) return;
+                driveProgress += 0.8;
+                if (driveProgress > 100) {
+                    driveProgress = 0; // Loop simulation
+                }
+
+                document.getElementById('drive-progress-text').innerText = `PROGRESS: ${Math.floor(driveProgress)}%`;
+
+                // Check if approaching a reward POI
+                const data = routesData[activeRouteKey];
+                const banner = document.getElementById('active-reward-banner');
+                const statusText = document.getElementById('current-reward-status');
+
+                // Trigger banner popup at specific progress thresholds if route has pois
+                let triggeredPoi = null;
+                if (data.pois.length > 0) {
+                    // map progress to POI indices
+                    const triggerStep = 100 / (data.pois.length + 1);
+                    data.pois.forEach((poi, index) => {
+                        const targetProgress = triggerStep * (index + 1);
+                        if (Math.abs(driveProgress - targetProgress) < 1.5) {
+                            triggeredPoi = poi;
+                        }
+                    });
+                }
+
+                if (triggeredPoi) {
+                    document.getElementById('reward-icon').innerText = triggeredPoi.icon;
+                    document.getElementById('reward-name').innerText = `${triggeredPoi.name} Detected!`;
+                    banner.classList.remove('opacity-0', 'scale-75');
+                    banner.classList.add('opacity-100', 'scale-100');
+                    statusText.innerText = `⚠️ POI Reward Captured: ${triggeredPoi.name}`;
+                } else if (driveProgress % 15 < 1) {
+                    banner.classList.remove('opacity-100', 'scale-100');
+                    banner.classList.add('opacity-0', 'scale-75');
+                    statusText.innerText = "Cruise Control Active • Scanning Path...";
+                }
+
+            }, 80);
+        }
+
+        function stopDriveSimulator() {
+            if (driveInterval) clearInterval(driveInterval);
+        }
+
+        function toggleDrivePlay() {
+            isPlayingDrive = !isPlayingDrive;
+            document.getElementById('play-pause-btn').innerText = isPlayingDrive ? "Pause" : "Resume";
+        }
+
+        function resetView() {
+            stopDriveSimulator();
+            currentMode = 'sim';
+            document.getElementById('simulation-view').classList.remove('hidden');
+            document.getElementById('drive-3d-view').classList.add('hidden');
+            document.getElementById('real-map-view').classList.add('hidden');
+            document.getElementById('badge-mode').innerText = "Vector Sim";
+            document.getElementById('badge-mode').className = "text-xs px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30";
+            document.getElementById('mode-subtitle').innerText = "Bhubaneswar ➔ Cuttack • Select persona route & launch live drive";
+            document.getElementById('drive-btn-text').innerText = "Start 3D Drive Simulator";
+            
+            const confirmBtn = document.getElementById('confirm-btn');
+            confirmBtn.innerHTML = `<span>Shift to Live Leaflet Map</span> <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>`;
+            confirmBtn.setAttribute('onclick', 'confirmRouteToMap()');
+
+            selectRoute('routeA');
+        }
+
+        window.onload = function() {
+            selectRoute('routeA');
+        };
+    </script>
+</body>
+</html>
+```eof

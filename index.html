@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart City Traffic Control | SIH Demo</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS for Maps (Red Light) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Tone.js for Engine Audio (Speed Radar) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
+    <!-- MediaPipe Legacy for Driver Monitor -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* Base / Shared */
+        body { font-family: 'Inter', sans-serif; overflow: hidden; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .video-mirror { transform: scaleX(-1); }
+
+        /* Speed Radar Styles */
+        .gauge-bg { stroke: #334155; stroke-width: 15; fill: none; }
+        .gauge-fill { 
+            stroke: #3b82f6; stroke-width: 15; fill: none; 
+            stroke-linecap: round; stroke-dasharray: 471; stroke-dashoffset: 471;
+            transition: stroke-dashoffset 0.1s linear, stroke 0.3s;
+        }
+        .gauge-fill.violation { stroke: #ef4444; }
+        
+        /* Map Custom Styling */
+        .leaflet-layer, .leaflet-control-zoom-in, .leaflet-control-zoom-out, .leaflet-control-attribution {
+            filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+        }
+
+        /* Pothole AI Styles */
+        @keyframes pulseRed {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+            50% { box-shadow: 0 0 0 30px rgba(220, 38, 38, 0); }
+        }
+        .hazard-active { animation: pulseRed 1s infinite; border: 8px solid #ef4444; }
+
+        /* Driver AI Styles */
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .warning-pulse { animation: pulse-red-dr 1s infinite; }
+        @keyframes pulse-red-dr {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); background-color: rgba(239, 68, 68, 0.2); }
+            70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); background-color: rgba(239, 68, 68, 0.1); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); background-color: rgba(30, 41, 59, 0.7); }
+        }
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%;
+            background: #10b981; cursor: pointer; margin-top: -8px; box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: #334155; border-radius: 2px; }
+        input[type=range]:focus { outline: none; }
+    </style>
+</head>
+<body class="bg-slate-900 text-white flex h-screen">
+
+    <!-- ========================================== -->
+    <!-- SIDEBAR NAVIGATION                         -->
+    <!-- ========================================== -->
+    <aside class="w-64 bg-slate-800 border-r border-slate-700 flex flex-col z-50 shadow-2xl">
+        <div class="p-6 border-b border-slate-700">
+            <h1 class="text-xl font-black text-blue-400 tracking-wide">Command Center</h1>
+            <p class="text-xs text-slate-400 mt-1 uppercase tracking-widest font-bold">SIH Prototype v2.0</p>
+        </div>
+        
+        <nav class="flex-1 p-4 overflow-y-auto" id="navMenu">
+            <!-- Enforcement Section -->
+            <p class="text-xs text-slate-500 mb-2 uppercase font-black tracking-widest px-2">Enforcement</p>
+            <div class="space-y-1 mb-6">
+                <button onclick="switchTab('dashboard')" class="w-full text-left px-4 py-3 rounded-lg bg-blue-600 text-white font-medium transition-colors shadow-lg shadow-blue-900/50" data-tab="dashboard">
+                    📊 Central Logs
+                </button>
+                <button onclick="switchTab('redlight')" class="w-full text-left px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-700 font-medium transition-colors" data-tab="redlight">
+                    🚦 Red Light Cams
+                </button>
+                <button onclick="switchTab('speed')" class="w-full text-left px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-700 font-medium transition-colors" data-tab="speed">
+                    🏎️ Speed Radar
+                </button>
+            </div>
+
+            <!-- Safety Section -->
+            <p class="text-xs text-slate-500 mb-2 uppercase font-black tracking-widest px-2">Safety Features</p>
+            <div class="space-y-1 border-t border-slate-700 pt-2">
+                <button onclick="switchTab('pothole')" class="w-full text-left px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-700 font-medium transition-colors" data-tab="pothole">
+                    🕳️ Pothole AI Cam
+                </button>
+                <button onclick="switchTab('driver')" class="w-full text-left px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-700 font-medium transition-colors" data-tab="driver">
+                    🛡️ SafeDrive AI
+                </button>
+            </div>
+        </nav>
+    </aside>
+
+    <!-- ========================================== -->
+    <!-- MAIN CONTENT AREA                          -->
+    <!-- ========================================== -->
+    <main class="flex-1 relative overflow-hidden bg-slate-900">
+        
+        <!-- TAB 1: CENTRAL LOGS (ENFORCEMENT) -->
+        <section id="tab-dashboard" class="p-8 h-full overflow-y-auto block">
+            <div class="max-w-5xl mx-auto">
+                <h2 class="text-3xl font-bold mb-6">Violation Database</h2>
+                <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-xl">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-slate-900 border-b border-slate-700 text-slate-400">
+                                <th class="p-4 font-medium">Timestamp</th>
+                                <th class="p-4 font-medium">Violation Type</th>
+                                <th class="p-4 font-medium">Severity / Details</th>
+                                <th class="p-4 font-medium">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logsTableBody">
+                            <tr class="border-b border-slate-700/50 text-slate-500">
+                                <td class="p-4" colspan="4">System initialized. Awaiting enforcement data...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: RED LIGHT ENFORCEMENT -->
+        <section id="tab-redlight" class="p-8 h-full hidden overflow-y-auto">
+            <div class="max-w-5xl mx-auto h-full flex flex-col min-h-[600px]">
+                <div class="flex justify-between items-end mb-6">
+                    <div>
+                        <h2 class="text-3xl font-bold mb-2">Red Light Tracker</h2>
+                        <p class="text-slate-400">GPS Geo-fencing algorithm with 5-meter tolerance threshold.</p>
+                    </div>
+                    <button id="btnConnectGPS" class="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold shadow-lg transition-colors">
+                        Connect Live GPS
+                    </button>
+                </div>
+                <div class="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
+                    <div class="flex-1 bg-slate-800 rounded-xl border border-slate-700 relative overflow-hidden flex flex-col min-h-[300px]">
+                        <div id="map" class="flex-1 w-full bg-slate-900 z-0"></div>
+                        <div id="rl-overlay" class="absolute top-4 right-4 px-4 py-2 rounded-full font-bold bg-slate-900/80 backdrop-blur border border-slate-600 z-[400] text-sm">GPS INACTIVE</div>
+                    </div>
+                    <div class="w-full lg:w-80 bg-slate-800 rounded-xl border border-slate-700 p-6 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-lg font-bold mb-4 text-center text-slate-300">Intersection Signal</h3>
+                            <div class="bg-slate-900 p-4 rounded-3xl border-4 border-slate-700 flex flex-col gap-4 items-center">
+                                <button id="btnLightRed" class="w-20 h-20 rounded-full bg-red-950 opacity-40"></button>
+                                <button id="btnLightYellow" class="w-20 h-20 rounded-full bg-yellow-950 opacity-40"></button>
+                                <button id="btnLightGreen" class="w-20 h-20 rounded-full bg-green-500 shadow-[0_0_30px_rgba(34,197,94,0.8)] scale-105"></button>
+                            </div>
+                        </div>
+                        <div class="mt-8">
+                            <div class="flex justify-between text-xs text-slate-400 mb-1">
+                                <span>Distance Moved</span><span>Limit: 5.0m</span>
+                            </div>
+                            <div class="text-2xl font-mono text-center mb-4 text-blue-400" id="rl-distance">0.0 m</div>
+                            <div id="rl-alert" class="p-4 rounded-xl text-center bg-slate-700 border border-slate-600">
+                                <p class="font-bold text-slate-400">STATUS: SAFE</p>
+                            </div>
+                            <button id="btnResetRL" class="mt-4 w-full bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-300 px-4 py-2 rounded-lg font-bold text-sm shadow transition-colors">🔄 Reset Tracking</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: SPEED RADAR -->
+        <section id="tab-speed" class="p-8 h-full hidden overflow-y-auto">
+            <div class="max-w-4xl mx-auto h-full flex flex-col min-h-[600px]">
+                <div class="flex justify-between items-end mb-6">
+                    <div>
+                        <h2 class="text-3xl font-bold mb-2">Speed Radar System</h2>
+                        <p class="text-slate-400">Physics simulation with realistic audio engine and 10-second grace period.</p>
+                    </div>
+                    <button id="btnInitAudio" class="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold shadow-lg transition-colors flex items-center gap-2">🔊 Initialize Audio Engine</button>
+                </div>
+                <div class="flex-1 bg-slate-800 rounded-xl border border-slate-700 p-8 flex flex-col items-center justify-center relative shadow-2xl min-h-[400px]">
+                    <div class="absolute top-6 left-6 flex flex-col gap-4">
+                        <div class="bg-slate-900 p-4 rounded-lg border border-slate-700 flex flex-col gap-2 shadow-lg">
+                            <label class="text-xs text-slate-400 font-bold uppercase">Set Zone Speed Limit</label>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="speedLimitInput" value="60" min="10" max="220" class="bg-slate-800 text-white px-3 py-2 rounded border border-slate-600 w-24 text-xl font-mono text-center outline-none">
+                                <span class="text-slate-400">km/h</span>
+                            </div>
+                        </div>
+                        <button id="btnResetSpeed" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 px-4 py-2 rounded-lg font-bold text-sm shadow transition-colors">🔄 Reset Simulator</button>
+                    </div>
+                    <div id="speed-warning-container" class="absolute top-6 right-6 w-64 hidden flex-col gap-2">
+                        <div class="bg-orange-500/20 border border-orange-500 p-3 rounded-lg text-center animate-pulse">
+                            <p class="text-orange-400 font-black tracking-widest">SLOW DOWN</p>
+                        </div>
+                        <div class="w-full bg-slate-900 rounded-full h-2 border border-slate-700">
+                            <div id="speed-timer-bar" class="bg-orange-500 h-full rounded-full transition-all ease-linear" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="relative w-80 h-80 my-8">
+                        <svg viewBox="0 0 200 200" class="w-full h-full drop-shadow-2xl">
+                            <path class="gauge-bg" d="M 40 160 A 80 80 0 1 1 160 160" />
+                            <path id="speed-gauge" class="gauge-fill" d="M 40 160 A 80 80 0 1 1 160 160" />
+                            <text id="speed-text" x="100" y="100" text-anchor="middle" dominant-baseline="central" class="text-5xl font-black fill-white font-mono">0</text>
+                            <text x="100" y="125" text-anchor="middle" class="text-sm fill-slate-400 font-bold tracking-widest">KM/H</text>
+                            <circle cx="100" cy="18" r="4" fill="#ef4444" id="limit-dot" class="opacity-0 transition-opacity" />
+                        </svg>
+                    </div>
+                    <div class="flex gap-8 w-full justify-center max-w-md mt-4">
+                        <button id="btnBrake" class="flex-1 bg-red-600/20 border-2 border-red-600 text-red-500 py-6 rounded-2xl font-black text-2xl tracking-wider active:scale-95 select-none touch-none">BRAKE</button>
+                        <button id="btnThrottle" class="flex-1 bg-green-500 border-2 border-green-500 text-slate-900 py-6 rounded-2xl font-black text-2xl tracking-wider active:scale-95 shadow-[0_0_20px_rgba(34,197,94,0.4)] select-none touch-none">THROTTLE</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: POTHOLE AI (SAFETY) -->
+        <section id="tab-pothole" class="hidden h-full relative overflow-hidden bg-[#0f172a]">
+            <!-- Top Bar -->
+            <div class="absolute top-0 left-0 w-full p-6 z-20 flex justify-between items-start pointer-events-none">
+                <div class="bg-slate-900/80 backdrop-blur px-6 py-3 rounded-2xl border border-slate-700 pointer-events-auto shadow-xl">
+                    <h1 class="text-xl font-bold text-white flex items-center gap-3">🕳️ MediaPipe Pothole AI</h1>
+                    <p id="ph_status-text" class="text-yellow-400 text-sm font-medium mt-1">Loading AI Model (Lite0)...</p>
+                </div>
+                <button id="ph_start-btn" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-8 rounded-xl shadow-lg pointer-events-auto transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    Start AI Camera
+                </button>
+            </div>
+
+            <!-- Hazard Memory DB UI -->
+            <div class="absolute top-24 right-6 w-80 bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-700 shadow-2xl z-20 flex flex-col pointer-events-auto max-h-[70vh] overflow-hidden">
+                <div class="p-4 border-b border-slate-700 bg-slate-800/50 flex justify-between items-center">
+                    <h3 class="font-bold text-white flex items-center gap-2">⚠️ Local Hazard Log</h3>
+                    <span id="ph_log-count" class="bg-red-500/20 text-red-400 text-xs font-bold px-2 py-1 rounded-full border border-red-500/50">0</span>
+                </div>
+                <div id="ph_memory-list" class="flex-1 overflow-y-auto p-2 space-y-2">
+                    <p class="text-slate-500 text-sm text-center p-4 italic" id="ph_empty-state">No potholes detected yet.</p>
+                </div>
+                <div class="p-2 border-t border-slate-700">
+                    <button onclick="window.clearPotholeMemory()" class="w-full py-2 text-xs text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors">Clear Log</button>
+                </div>
+            </div>
+
+            <!-- Hazard Alert Overlay -->
+            <div id="ph_hazard-alert" class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 bg-red-600 border-4 border-red-400 text-white px-10 py-8 rounded-3xl shadow-[0_0_80px_rgba(220,38,38,0.8)] items-center gap-6 flex-col backdrop-blur-md">
+                <div class="text-center">
+                    <h2 class="text-4xl font-black uppercase tracking-widest mb-2">Pothole Detected</h2>
+                    <p id="ph_hazard-details" class="text-red-100 text-xl font-medium">Reduce speed immediately!</p>
+                </div>
+            </div>
+
+            <!-- Video Environment -->
+            <div id="ph_camera-container" class="relative w-full h-full flex justify-center items-center transition-all duration-300 box-border bg-black">
+                <video id="ph_webcam" class="video-mirror w-full h-full object-cover" autoplay playsinline muted></video>
+                <canvas id="ph_output-canvas" class="video-mirror absolute top-0 left-0 w-full h-full pointer-events-none"></canvas>
+            </div>
+        </section>
+
+        <!-- TAB 5: SAFEDRIVE AI (RASH DRIVING / SAFETY) -->
+        <section id="tab-driver" class="hidden h-full overflow-y-auto bg-[#0f172a] p-4 md:p-8">
+            <header class="flex flex-wrap gap-4 justify-between items-center mb-6">
+                <div>
+                    <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">SafeDrive AI</h1>
+                    <p class="text-slate-400 text-sm mt-1">SIH Prototype: Vision, Speed & GPS Fusion</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-4">
+                    <div class="flex items-center gap-2 bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg">
+                        <span id="dr_gpsCoords" class="text-sm font-mono text-slate-300">Acquiring GPS...</span>
+                    </div>
+                    <div class="flex items-center gap-2 bg-slate-800 p-2 rounded-lg border border-slate-600">
+                        <select id="dr_cameraSelect" class="bg-slate-900 border border-slate-600 text-white text-sm rounded p-1.5 min-w-[200px]">
+                            <option value="">Granting permissions...</option>
+                        </select>
+                    </div>
+                    <button id="dr_startBtn" class="bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 px-6 rounded-lg shadow-lg transition-all">Initialize System</button>
+                </div>
+            </header>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 relative">
+                <!-- Video Container -->
+                <div class="lg:col-span-2 relative rounded-2xl overflow-hidden bg-black border border-slate-700 shadow-2xl flex items-center justify-center min-h-[400px]">
+                    <video id="dr_input_video" class="absolute hidden w-full h-full object-cover video-mirror" autoplay playsinline></video>
+                    <canvas id="dr_output_canvas" class="w-full h-full object-cover max-h-[70vh] video-mirror"></canvas>
+                    <div id="dr_globalStatus" class="absolute top-4 left-4 right-4 text-center py-2 rounded-lg font-bold text-xl tracking-wider uppercase transition-colors duration-300 bg-slate-800/80 text-slate-400 border border-slate-600">
+                        System Offline
+                    </div>
+                </div>
+
+                <!-- Right Panels -->
+                <div class="flex flex-col gap-4">
+                    <!-- Driver Speedometer (Independent from Radar Tab) -->
+                    <div class="glass-panel rounded-xl p-5 flex flex-col gap-3 relative overflow-hidden">
+                        <div class="flex justify-between items-center mb-2 z-10">
+                            <h3 class="text-lg font-semibold text-slate-200">Vehicle Speed</h3>
+                            <span id="dr_speedStatusBadge" class="text-xs font-bold px-2 py-1 rounded-full bg-slate-700 text-slate-300">WAITING</span>
+                        </div>
+                        <div class="flex justify-center z-10">
+                            <canvas id="dr_speedometerCanvas" width="250" height="250" class="w-full max-w-[200px] aspect-square block bg-slate-900 rounded-full shadow-[inset_0_0_20px_rgba(0,0,0,0.8)]"></canvas>
+                        </div>
+                        <div class="z-10 mt-2 space-y-1">
+                            <label class="text-xs text-slate-400">Simulator Throttle (km/h)</label>
+                            <input type="range" id="dr_speedControl" min="0" max="120" value="0" class="w-full">
+                            <p class="text-xs text-slate-500 text-center mt-1">Limit: <span class="text-yellow-400">60 km/h</span></p>
+                        </div>
+                        <div id="dr_speedWarningOverlay" class="absolute inset-0 bg-yellow-500/20 z-0 hidden animate-pulse"></div>
+                    </div>
+
+                    <!-- Vision Panels -->
+                    <div class="grid grid-cols-2 gap-4">
+                        <div id="dr_eyePanel" class="glass-panel rounded-xl p-4 flex flex-col gap-2 transition-all">
+                            <h3 class="text-sm font-semibold text-slate-300">Drowsiness</h3>
+                            <span id="dr_eyeStatusBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 w-max">WAITING</span>
+                            <div class="mt-1">
+                                <div class="flex justify-between text-xs mb-1 text-slate-400"><span>EAR</span><span id="dr_earValue">0.00</span></div>
+                                <div class="w-full bg-slate-700 rounded-full h-1.5"><div id="dr_earBar" class="bg-blue-500 h-1.5 rounded-full" style="width: 0%"></div></div>
+                            </div>
+                        </div>
+                        <div id="dr_bodyPanel" class="glass-panel rounded-xl p-4 flex flex-col gap-2 transition-all">
+                            <h3 class="text-sm font-semibold text-slate-300">Distraction</h3>
+                            <span id="dr_bodyStatusBadge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 w-max">WAITING</span>
+                            <div class="mt-1">
+                                <div class="flex justify-between text-xs mb-1 text-slate-400"><span>Move</span><span id="dr_movementValue">0.0</span></div>
+                                <div class="w-full bg-slate-700 rounded-full h-1.5"><div id="dr_movementBar" class="bg-purple-500 h-1.5 rounded-full" style="width: 0%"></div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Driver Event Log -->
+                    <div class="glass-panel rounded-xl p-4 flex-1 flex flex-col min-h-[120px]">
+                        <h3 class="text-sm font-semibold text-slate-200 mb-2">Live Incident Log</h3>
+                        <div id="dr_eventLog" class="flex-1 overflow-y-auto space-y-2 text-xs font-mono">
+                            <div class="text-slate-500">System pending initialization...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Global Challan Modal (For Enforcement Tabs Only) -->
+    <div id="global-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-[1000] hidden items-center justify-center">
+        <div class="bg-slate-800 border-2 border-red-500 p-8 rounded-2xl max-w-md w-full shadow-[0_0_50px_rgba(239,68,68,0.3)] text-center transform scale-95 opacity-0 transition-all duration-300" id="modal-content">
+            <div class="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4"><span class="text-5xl">🚨</span></div>
+            <h2 class="text-3xl font-black text-white mb-2 tracking-wider">CHALLAN ISSUED</h2>
+            <p id="modal-message" class="text-slate-300 mb-6 bg-slate-900 p-4 rounded-lg font-mono text-sm border border-slate-700"></p>
+            <button onclick="closeModal()" class="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-colors">Acknowledge & Save to Logs</button>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- JAVASCRIPT LOGIC (CORE & ENFORCEMENT)      -->
+    <!-- ========================================== -->
+    <script>
+        // --- 1. CORE SYSTEM ---
+        let challanDatabase = [];
+        
+        function switchTab(tabId) {
+            document.querySelectorAll('nav button').forEach(btn => {
+                btn.className = 'w-full text-left px-4 py-3 rounded-lg text-slate-300 hover:bg-slate-700 font-medium transition-colors';
+            });
+            const activeBtn = document.querySelector(`nav button[data-tab="${tabId}"]`);
+            if(activeBtn) activeBtn.className = 'w-full text-left px-4 py-3 rounded-lg bg-blue-600 text-white font-medium transition-colors shadow-lg shadow-blue-900/50';
+
+            ['dashboard', 'redlight', 'speed', 'pothole', 'driver'].forEach(id => {
+                document.getElementById('tab-' + id).classList.add('hidden');
+                document.getElementById('tab-' + id).classList.remove('block');
+            });
+            document.getElementById('tab-' + tabId).classList.remove('hidden');
+            document.getElementById('tab-' + tabId).classList.add('block');
+
+            if(tabId === 'redlight' && window.rlMap) setTimeout(() => window.rlMap.invalidateSize(), 100);
+        }
+
+        function issueChallan(type, details, loc = "Not Specified") {
+            const entry = { id: 'CHL-' + Math.random().toString(36).substr(2, 6).toUpperCase(), timestamp: new Date().toLocaleTimeString(), type: type, details: details, location: loc, status: 'Unpaid' };
+            challanDatabase.unshift(entry);
+            updateLogsTable();
+            
+            document.getElementById('modal-message').innerHTML = `<b>ID:</b> ${entry.id}<br><b>Type:</b> ${entry.type}<br><b>Details:</b> ${entry.details}<br><b>Location:</b> ${entry.location}<br><b>Time:</b> ${entry.timestamp}`;
+            const modal = document.getElementById('global-modal');
+            const content = document.getElementById('modal-content');
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+            setTimeout(() => { content.classList.remove('scale-95', 'opacity-0'); content.classList.add('scale-100', 'opacity-100'); }, 10);
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('global-modal');
+            const content = document.getElementById('modal-content');
+            content.classList.remove('scale-100', 'opacity-100'); content.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => { modal.classList.add('hidden'); modal.classList.remove('flex'); }, 300);
+        }
+
+        function updateLogsTable() {
+            const tbody = document.getElementById('logsTableBody');
+            if(challanDatabase.length === 0) return;
+            tbody.innerHTML = challanDatabase.map(log => `
+                <tr class="border-b border-slate-700/50 hover:bg-slate-800/50">
+                    <td class="p-4 text-slate-300 font-mono text-sm">${log.timestamp}</td>
+                    <td class="p-4"><span class="px-2 py-1 bg-red-900/50 text-red-400 rounded text-xs font-bold border border-red-800/50 uppercase">${log.type}</span></td>
+                    <td class="p-4 text-slate-400 text-sm">${log.details}<div class="text-xs text-slate-500 mt-1">📍 ${log.location}</div></td>
+                    <td class="p-4"><span class="text-orange-400 text-xs font-bold">● ${log.status}</span></td>
+                </tr>
+            `).join('');
+        }
+
+        // --- 2. RED LIGHT ENFORCEMENT ---
+        let rlMap, rlMarker, rlCircle, rlActiveLight = 'green', rlWatchId = null, rlRefLat = null, rlRefLng = null, rlViolationStage = 0;
+        const RL_LIMIT = 5.0;
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3, f1 = lat1 * Math.PI/180, f2 = lat2 * Math.PI/180, df = (lat2-lat1) * Math.PI/180, dl = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(df/2) * Math.sin(df/2) + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2) * Math.sin(dl/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+        }
+        function initRedLightModule() {
+            rlMap = window.rlMap = L.map('map').setView([20.296, 85.824], 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(rlMap);
+            rlMap.on('click', (e) => { if(rlMarker) { rlMarker.setLatLng(e.latlng); handleGPSUpdate(e.latlng.lat, e.latlng.lng, 1.0); }});
+            document.getElementById('btnLightRed').onclick = () => setRLLight('red');
+            document.getElementById('btnLightYellow').onclick = () => setRLLight('yellow');
+            document.getElementById('btnLightGreen').onclick = () => setRLLight('green');
+            document.getElementById('btnConnectGPS').onclick = startGPS;
+            document.getElementById('btnResetRL').onclick = () => { setRLLight('green'); rlRefLat = null; rlRefLng = null; document.getElementById('rl-distance').innerText = "0.0 m"; };
+        }
+        function setRLLight(color) {
+            rlActiveLight = color;
+            document.getElementById('btnLightRed').className = `w-20 h-20 rounded-full transition-all duration-300 ${color==='red' ? 'bg-red-500 shadow-[0_0_30px_rgba(239,68,68,0.8)] scale-105' : 'bg-red-950 opacity-40'}`;
+            document.getElementById('btnLightYellow').className = `w-20 h-20 rounded-full transition-all duration-300 ${color==='yellow' ? 'bg-yellow-400 shadow-[0_0_30px_rgba(250,204,21,0.8)] scale-105' : 'bg-yellow-950 opacity-40'}`;
+            document.getElementById('btnLightGreen').className = `w-20 h-20 rounded-full transition-all duration-300 ${color==='green' ? 'bg-green-500 shadow-[0_0_30px_rgba(34,197,94,0.8)] scale-105' : 'bg-green-950 opacity-40'}`;
+            if(color === 'red') {
+                if(rlMarker) {
+                    const pos = rlMarker.getLatLng(); rlRefLat = pos.lat; rlRefLng = pos.lng; rlViolationStage = 0;
+                    document.getElementById('rl-alert').className = "p-4 rounded-xl text-center bg-red-500/20 border border-red-500";
+                    document.getElementById('rl-alert').innerHTML = `<p class="font-bold text-red-400">RED LIGHT ACTIVE</p>`;
+                    if(rlCircle) rlMap.removeLayer(rlCircle);
+                    rlCircle = L.circle([pos.lat, pos.lng], {color: 'red', fillColor: '#f03', fillOpacity: 0.1, radius: RL_LIMIT}).addTo(rlMap);
+                }
+            } else {
+                rlViolationStage = 0; document.getElementById('rl-distance').innerText = "0.0 m";
+                document.getElementById('rl-alert').className = "p-4 rounded-xl text-center bg-green-500/10 border border-green-500/30";
+                document.getElementById('rl-alert').innerHTML = `<p class="font-bold text-green-400">STATUS: SAFE</p>`;
+                if(rlCircle) rlMap.removeLayer(rlCircle);
+            }
+        }
+        function startGPS() {
+            const btn = document.getElementById('btnConnectGPS'); btn.innerText = "Connecting...";
+            if ("geolocation" in navigator) {
+                rlWatchId = navigator.geolocation.watchPosition(
+                    (p) => { btn.innerText = "GPS Connected"; btn.classList.replace('bg-blue-600', 'bg-green-600'); handleGPSUpdate(p.coords.latitude, p.coords.longitude, p.coords.accuracy); },
+                    (e) => { btn.innerText = "Using Simulator"; btn.classList.replace('bg-blue-600', 'bg-slate-600'); handleGPSUpdate(20.296, 85.824, 0); },
+                    { enableHighAccuracy: true, maximumAge: 0 }
+                );
+            }
+        }
+        function handleGPSUpdate(lat, lng, acc) {
+            document.getElementById('rl-overlay').innerText = `ACCURACY: ± ${Math.round(acc)}m`;
+            if (!rlMarker) { rlMarker = L.circleMarker([lat, lng], {radius: 8, fillColor: "#3b82f6", color: "#fff", weight: 2, opacity: 1, fillOpacity: 0.9}).addTo(rlMap); rlMap.setView([lat, lng], 18); }
+            else { rlMarker.setLatLng([lat, lng]); }
+            if(rlActiveLight === 'red' && rlRefLat !== null && rlViolationStage !== 2) {
+                const dist = getDistance(rlRefLat, rlRefLng, lat, lng);
+                document.getElementById('rl-distance').innerText = `${dist.toFixed(1)} m`;
+                if(dist > RL_LIMIT) {
+                    rlViolationStage = 2; issueChallan("Signal Jumping", `Moved ${dist.toFixed(1)}m during Red Light.`, `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+                    document.getElementById('rl-alert').className = "p-4 rounded-xl text-center bg-red-600 border border-red-500 text-white";
+                    document.getElementById('rl-alert').innerHTML = `<p class="font-black text-xl">VIOLATION RECORDED</p>`;
+                }
+            }
+        }
+
+        // --- 3. SPEED RADAR ENFORCEMENT ---
+        let spd_current = 0, spd_isAccelerating = false, spd_isBraking = false, spd_violationTimer = 0, spd_violationStage = 0, spd_lastFrameTime = performance.now(), spd_limit = 60;
+        let audioCtxReady = false, audioMuted = false, engineSynth, engineDist, engineFilter;
+        function initSpeedModule() {
+            const btnThrottle = document.getElementById('btnThrottle'), btnBrake = document.getElementById('btnBrake');
+            btnThrottle.onmousedown = btnThrottle.ontouchstart = (e) => { e.preventDefault(); spd_isAccelerating = true; };
+            window.onmouseup = window.ontouchend = (e) => { spd_isAccelerating = false; spd_isBraking = false; };
+            btnBrake.onmousedown = btnBrake.ontouchstart = (e) => { e.preventDefault(); spd_isBraking = true; };
+            const limitInput = document.getElementById('speedLimitInput');
+            limitInput.addEventListener('input', (e) => { let v = parseInt(e.target.value); if(!isNaN(v) && v>=10 && v<=220) spd_limit = v; });
+            limitInput.addEventListener('blur', (e) => { let v = parseInt(e.target.value); if(isNaN(v) || v<10 || v>220) e.target.value = spd_limit; });
+            document.getElementById('btnInitAudio').onclick = initAudioEngine;
+            document.getElementById('btnResetSpeed').onclick = () => {
+                spd_current = 0; spd_violationStage = 0; spd_violationTimer = 0;
+                document.getElementById('speed-warning-container').classList.add('hidden'); document.getElementById('speed-warning-container').classList.remove('flex');
+                document.getElementById('speed-gauge').classList.remove('violation'); document.getElementById('speed-text').classList.replace('fill-red-500', 'fill-white'); document.getElementById('limit-dot').classList.add('opacity-0');
+            };
+            requestAnimationFrame(speedPhysicsLoop);
+        }
+        async function initAudioEngine() {
+            if (!audioCtxReady) {
+                await Tone.start(); engineDist = new Tone.Distortion(0.8); engineFilter = new Tone.Filter(800, "lowpass", -24);
+                engineSynth = new Tone.FMSynth({oscillator: {type: "sawtooth"}, envelope: {attack: 0.1, decay: 0.1, sustain: 1, release: 0.5}, modulation: {type: "square"}});
+                engineSynth.chain(engineDist, engineFilter, Tone.Destination); engineSynth.triggerAttack(50);
+                audioCtxReady = true; audioMuted = false; Tone.Destination.mute = false;
+            } else { audioMuted = !audioMuted; Tone.Destination.mute = audioMuted; }
+            const btn = document.getElementById('btnInitAudio');
+            btn.innerHTML = audioMuted ? '🔇 Sound: OFF' : '🔊 Sound: ON';
+            btn.className = audioMuted ? 'px-6 py-3 bg-slate-700 text-slate-300 rounded-lg font-bold shadow-lg flex items-center gap-2' : 'px-6 py-3 bg-purple-600 text-white rounded-lg font-bold shadow-lg flex items-center gap-2';
+        }
+        function speedPhysicsLoop(timestamp) {
+            const deltaTime = timestamp - spd_lastFrameTime; spd_lastFrameTime = timestamp;
+            const MAX = 220, ACCEL = 0.12 * (deltaTime/16), BRAKE = 0.4 * (deltaTime/16), FRIC = 0.02 * (deltaTime/16);
+            if(spd_isAccelerating && !spd_isBraking && spd_violationStage !== 2) spd_current += ACCEL; else if(spd_isBraking) spd_current -= BRAKE; else spd_current -= FRIC;
+            spd_current = Math.max(0, Math.min(spd_current, MAX));
+            if(audioCtxReady && !audioMuted) { engineSynth.frequency.rampTo(50 + (spd_current*1.5), 0.1); engineFilter.frequency.value = 800 + (spd_current*10); }
+            updateSpeedUI(deltaTime); requestAnimationFrame(speedPhysicsLoop);
+        }
+        function updateSpeedUI(deltaTime) {
+            const gauge = document.getElementById('speed-gauge'), text = document.getElementById('speed-text'), warn = document.getElementById('speed-warning-container');
+            gauge.style.strokeDashoffset = 471 - ((spd_current/220) * 471); text.textContent = Math.round(spd_current);
+            if(spd_current > spd_limit) {
+                gauge.classList.add('violation'); text.classList.replace('fill-white', 'fill-red-500'); document.getElementById('limit-dot').classList.remove('opacity-0');
+                if(spd_violationStage !== 2) {
+                    spd_violationStage = 1; warn.classList.remove('hidden'); warn.classList.add('flex');
+                    spd_violationTimer += deltaTime; document.getElementById('speed-timer-bar').style.width = `${Math.min((spd_violationTimer/10000)*100, 100)}%`;
+                    if(spd_violationTimer >= 10000) {
+                        spd_violationStage = 2; issueChallan("Overspeeding", `Recorded ${Math.round(spd_current)} km/h in ${spd_limit} zone.`, "Highway Radar Sim");
+                        spd_isAccelerating = false; warn.classList.add('hidden');
+                    }
+                }
+            } else {
+                gauge.classList.remove('violation'); text.classList.replace('fill-red-500', 'fill-white'); document.getElementById('limit-dot').classList.add('opacity-0');
+                if(spd_violationStage === 1) { spd_violationStage = 0; spd_violationTimer = 0; warn.classList.add('hidden'); warn.classList.remove('flex'); }
+                else if (spd_violationStage===2 && spd_current===0) { spd_violationStage=0; spd_violationTimer=0; }
+            }
+        }
+
+        // --- 4. SAFEDRIVE AI (DRIVER MONITORING SYSTEM) ---
+        // Isolated completely from enforcement systems
+        function initDriverModule() {
+            let dr_systemRunning = false, dr_isSleeping = false, dr_isDistracted = false, dr_consecClosed = 0, dr_moveHistory = [];
+            let dr_audioCtx = null, dr_currentGPS = {lat: null, lon: null, address: "Unknown Location"}, dr_gpsActive = false;
+            let dr_targetSpd = 0, dr_displaySpd = 0, dr_isOverspeeding = false; const DR_SPEED_LIMIT = 60;
+            const dr_eventLog = document.getElementById('dr_eventLog'), dr_video = document.getElementById('dr_input_video'), dr_canvas = document.getElementById('dr_output_canvas'), dr_ctx = dr_canvas.getContext('2d');
+            const dr_speedCtx = document.getElementById('dr_speedometerCanvas').getContext('2d');
+            
+            // Initialization Logic
+            document.getElementById('dr_startBtn').addEventListener('click', async () => {
+                if (dr_systemRunning) return;
+                const btn = document.getElementById('dr_startBtn'); btn.innerText = 'Initializing...'; btn.disabled = true;
+                try {
+                    if (!dr_audioCtx) dr_audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    initDrGPS(); drLog('Opening selected camera...', 'info');
+                    const stream = await navigator.mediaDevices.getUserMedia({video: document.getElementById('dr_cameraSelect').value ? {deviceId: {exact: document.getElementById('dr_cameraSelect').value}} : {facingMode: 'user'}});
+                    dr_video.srcObject = stream;
+                    dr_video.onloadeddata = async () => {
+                        dr_video.play(); btn.innerText = 'Waking up AI...';
+                        try { await faceMesh.initialize(); await pose.initialize(); } catch(e) { drLog('AI Init Error: '+e.message, 'danger'); }
+                        dr_systemRunning = true; btn.innerText = 'System Active'; btn.classList.replace('bg-blue-600', 'bg-emerald-600');
+                        drUpdateStatus(); drLog('Sensors active. Commencing telemetry.', 'info'); drRenderLoop();
+                    };
+                } catch (err) { drLog(`Camera Error: ${err.message}`, 'danger'); btn.innerText = 'Start Failed'; btn.disabled = false; }
+            });
+
+            // Camera Setup
+            navigator.mediaDevices.enumerateDevices().then(devices => {
+                const sel = document.getElementById('dr_cameraSelect'); sel.innerHTML='';
+                const vids = devices.filter(d => d.kind === 'videoinput');
+                if(vids.length===0) { sel.innerHTML='<option>No cameras</option>'; return; }
+                vids.forEach((d,i) => { const opt=document.createElement('option'); opt.value=d.deviceId; opt.text=d.label||`Camera ${i+1}`; sel.appendChild(opt); });
+            });
+
+            // Utilities
+            function drLog(msg, type='info', addGPS=false) {
+                const col = type==='danger'?'text-red-400 font-bold':type==='warning'?'text-yellow-400':'text-slate-300';
+                let txt = `[${new Date().toLocaleTimeString()}] ${msg}`;
+                if(addGPS && dr_gpsActive) txt += ` <br><span class="text-blue-400 ml-4">📍 ${dr_currentGPS.address}</span>`;
+                const div = document.createElement('div'); div.className = col; div.innerHTML = txt;
+                dr_eventLog.insertBefore(div, dr_eventLog.firstChild);
+                if(dr_eventLog.children.length > 30) dr_eventLog.removeChild(dr_eventLog.lastChild);
+            }
+            function drBeep(type) {
+                if(!dr_audioCtx) return; if(dr_audioCtx.state==='suspended') dr_audioCtx.resume();
+                const osc = dr_audioCtx.createOscillator(), gain = dr_audioCtx.createGain();
+                osc.connect(gain); gain.connect(dr_audioCtx.destination);
+                if(type==='warn'){ osc.type='square'; osc.frequency.value=600; gain.gain.setValueAtTime(0.1, dr_audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, dr_audioCtx.currentTime+0.1); osc.start(); osc.stop(dr_audioCtx.currentTime+0.1); }
+                else { osc.type='sawtooth'; osc.frequency.setValueAtTime(400, dr_audioCtx.currentTime); osc.frequency.linearRampToValueAtTime(800, dr_audioCtx.currentTime+0.1); gain.gain.setValueAtTime(0.2, dr_audioCtx.currentTime); gain.gain.linearRampToValueAtTime(0.01, dr_audioCtx.currentTime+0.3); osc.start(); osc.stop(dr_audioCtx.currentTime+0.3); }
+            }
+            function initDrGPS() {
+                if("geolocation" in navigator) navigator.geolocation.watchPosition(
+                    async (p) => { 
+                        dr_gpsActive = true; dr_currentGPS.lat = p.coords.latitude; dr_currentGPS.lon = p.coords.longitude;
+                        try{ const r=await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${dr_currentGPS.lat}&lon=${dr_currentGPS.lon}`); const d=await r.json(); if(d.address) dr_currentGPS.address = (d.address.city||d.address.town||"Local Road"); }catch(e){}
+                        document.getElementById('dr_gpsCoords').innerText = dr_currentGPS.address;
+                    }, 
+                    ()=>document.getElementById('dr_gpsCoords').innerText = "GPS Denied"
+                );
+            }
+            function drUpdateStatus() {
+                const el = document.getElementById('dr_globalStatus');
+                if(dr_isSleeping || dr_isDistracted) { el.innerText = dr_isSleeping ? 'CRITICAL: DROWSINESS' : 'WARNING: ERRATIC'; el.className = 'absolute top-4 left-4 right-4 text-center py-2 rounded-lg font-bold text-xl uppercase bg-red-600 text-white shadow-[0_0_20px_rgba(220,38,38,0.8)]'; }
+                else if(dr_isOverspeeding) { el.innerText = 'REDUCE SPEED'; el.className = 'absolute top-4 left-4 right-4 text-center py-2 rounded-lg font-bold text-xl uppercase bg-yellow-500 text-black shadow-[0_0_20px_rgba(234,179,8,0.5)]'; }
+                else { el.innerText = 'DRIVER SAFE'; el.className = 'absolute top-4 left-4 right-4 text-center py-2 rounded-lg font-bold text-xl uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/50'; }
+            }
+
+            // Speed Simulation
+            document.getElementById('dr_speedControl').addEventListener('input', e=>dr_targetSpd=parseFloat(e.target.value));
+            function drAnimSpeed() {
+                dr_displaySpd += (dr_targetSpd - dr_displaySpd) * 0.1;
+                dr_speedCtx.clearRect(0,0,250,250); const cx=125, cy=125, start=Math.PI*0.75, range=Math.PI*1.5;
+                dr_speedCtx.beginPath(); dr_speedCtx.arc(cx,cy,100,start,start+range); dr_speedCtx.lineWidth=12; dr_speedCtx.strokeStyle='#1e293b'; dr_speedCtx.lineCap='round'; dr_speedCtx.stroke();
+                const rat = Math.min(Math.max(dr_displaySpd/120,0),1), col = rat>(60/120)?'#eab308':'#10b981';
+                dr_speedCtx.beginPath(); dr_speedCtx.arc(cx,cy,100,start,start+(range*rat)); dr_speedCtx.lineWidth=12; dr_speedCtx.strokeStyle=col; dr_speedCtx.lineCap='round'; dr_speedCtx.stroke();
+                dr_speedCtx.fillStyle=col; dr_speedCtx.font='bold 36px Inter'; dr_speedCtx.textAlign='center'; dr_speedCtx.fillText(Math.round(dr_displaySpd),cx,cy+10);
+                
+                if(dr_displaySpd > DR_SPEED_LIMIT && !dr_isOverspeeding) { dr_isOverspeeding=true; document.getElementById('dr_speedWarningOverlay').classList.remove('hidden'); drLog('Overspeeding detected','warning',true); drBeep('warn'); drUpdateStatus(); }
+                else if(dr_displaySpd <= DR_SPEED_LIMIT && dr_isOverspeeding) { dr_isOverspeeding=false; document.getElementById('dr_speedWarningOverlay').classList.add('hidden'); drUpdateStatus(); }
+                requestAnimationFrame(drAnimSpeed);
+            } drAnimSpeed();
+
+            // Vision AI
+            const faceMesh = new FaceMesh({locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`}); faceMesh.setOptions({maxNumFaces:1});
+            faceMesh.onResults(r => {
+                if(r.multiFaceLandmarks) {
+                    const pts = r.multiFaceLandmarks[0]; if(!pts) return;
+                    const d = (p1,p2) => Math.hypot(p1.x-p2.x, p1.y-p2.y);
+                    const ear = (d(pts[160],pts[144])+d(pts[158],pts[153]))/(2.0*d(pts[33],pts[133]));
+                    document.getElementById('dr_earValue').innerText = ear.toFixed(2); document.getElementById('dr_earBar').style.width = `${Math.min(100,Math.max(0,(ear-0.15)/0.15*100))}%`;
+                    if(ear < 0.22) { dr_consecClosed++; document.getElementById('dr_earBar').classList.replace('bg-blue-500','bg-red-500'); }
+                    else { dr_consecClosed=0; document.getElementById('dr_earBar').classList.replace('bg-red-500','bg-blue-500'); if(dr_isSleeping){ dr_isSleeping=false; document.getElementById('dr_eyePanel').classList.remove('warning-pulse'); drUpdateStatus(); } }
+                    if(dr_consecClosed > 15 && !dr_isSleeping) { dr_isSleeping=true; document.getElementById('dr_eyePanel').classList.add('warning-pulse'); drLog('Micro-sleep detected!','danger',true); drUpdateStatus(); }
+                    if(dr_isSleeping) drBeep('critical');
+                }
+            });
+            const pose = new Pose({locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`}); pose.setOptions({modelComplexity:0});
+            pose.onResults(r => {
+                if(r.poseLandmarks) {
+                    const l=r.poseLandmarks[11], rh=r.poseLandmarks[12]; if(l.visibility<0.5) return;
+                    dr_moveHistory.push({x:(l.x+rh.x)/2, y:(l.y+rh.y)/2}); if(dr_moveHistory.length>30) dr_moveHistory.shift();
+                    let m=0; for(let i=1;i<dr_moveHistory.length;i++) m+=Math.hypot(dr_moveHistory[i].x-dr_moveHistory[i-1].x, dr_moveHistory[i].y-dr_moveHistory[i-1].y);
+                    document.getElementById('dr_movementValue').innerText=m.toFixed(2); document.getElementById('dr_movementBar').style.width=`${Math.min(100,(m/0.15)*100)}%`;
+                    if(m>0.10 && !dr_isDistracted){ dr_isDistracted=true; document.getElementById('dr_bodyPanel').classList.add('warning-pulse'); drLog('Erratic body movement!','danger',true); drUpdateStatus(); }
+                    else if(m<=0.10 && dr_isDistracted){ dr_isDistracted=false; document.getElementById('dr_bodyPanel').classList.remove('warning-pulse'); drUpdateStatus(); }
+                }
+            });
+            async function drRenderLoop() {
+                if(!dr_systemRunning) return;
+                if(dr_video.readyState===4 && dr_video.videoWidth>0) {
+                    dr_canvas.width = dr_video.videoWidth; dr_canvas.height = dr_video.videoHeight;
+                    dr_ctx.save(); dr_ctx.clearRect(0,0,dr_canvas.width,dr_canvas.height); dr_ctx.drawImage(dr_video,0,0);
+                    try { await faceMesh.send({image:dr_canvas}); await pose.send({image:dr_canvas}); } catch(e){}
+                    if(dr_isSleeping||dr_isDistracted) { dr_ctx.fillStyle='rgba(255,0,0,0.2)'; dr_ctx.fillRect(0,0,dr_canvas.width,dr_canvas.height); }
+                    dr_ctx.restore();
+                }
+                requestAnimationFrame(drRenderLoop);
+            }
+        }
+
+        // --- BOOTSTRAP ---
+        window.onload = () => {
+            initRedLightModule();
+            initSpeedModule();
+            initDriverModule(); // Safety module loads quietly in background
+            switchTab('dashboard');
+        };
+    </script>
+
+    <!-- ========================================== -->
+    <!-- POTHOLE AI MODULE (ESM SCRIPT)             -->
+    <!-- ========================================== -->
+    <script type="module">
+        import { ObjectDetector, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+        const v = document.getElementById("ph_webcam"), c = document.getElementById("ph_output-canvas"), ctx = c.getContext("2d");
+        const btn = document.getElementById("ph_start-btn"), stat = document.getElementById("ph_status-text"), alertBox = document.getElementById("ph_hazard-alert");
+        let detector, isDetecting = false, lastTime = -1, alertTimer = null, lastLog = 0;
+        
+        let potholeMem = JSON.parse(localStorage.getItem('pothole_database')) || [];
+        function renderPhMem() {
+            document.getElementById('ph_log-count').innerText = potholeMem.length;
+            const list = document.getElementById('ph_memory-list');
+            if(potholeMem.length === 0) { list.innerHTML = '<p class="text-slate-500 text-sm text-center p-4 italic">No potholes detected yet.</p>'; return; }
+            list.innerHTML = potholeMem.map(h => `<div class="bg-slate-800 p-3 rounded-xl border border-slate-700 flex flex-col gap-1 shadow-sm"><div class="flex justify-between items-center"><span class="text-white font-bold text-sm truncate pr-2">${h.road}</span><span class="text-xs text-slate-400 shrink-0">${h.time}</span></div><div class="text-[10px] text-slate-500 font-mono bg-slate-900 px-2 py-1 rounded w-max border border-slate-700">GPS: ${h.coordinates}</div></div>`).join('');
+        } renderPhMem();
+        window.clearPotholeMemory = () => { potholeMem = []; localStorage.removeItem('pothole_database'); renderPhMem(); };
+
+        async function initPH() {
+            try {
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+                detector = await ObjectDetector.createFromOptions(vision, { baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite", delegate: "GPU" }, scoreThreshold: 0.5, runningMode: "VIDEO" });
+                stat.innerText = "MediaPipe Ready."; stat.className = "text-green-400 text-sm font-medium mt-1";
+                btn.disabled = false;
+            } catch(e) { stat.innerText = "Failed to load MediaPipe."; stat.className = "text-red-400 text-sm font-medium mt-1"; }
+        } initPH();
+
+        btn.onclick = async () => {
+            if(!detector) return; btn.classList.add("hidden"); stat.innerText = "Starting Camera...";
+            try {
+                v.srcObject = await navigator.mediaDevices.getUserMedia({video: {facingMode: "user", width: 1280, height: 720}});
+                v.addEventListener("loadeddata", () => { c.width = v.videoWidth; c.height = v.videoHeight; stat.innerText = "Scanning (Hold cell phone to simulate pothole)"; isDetecting = true; phLoop(); });
+            } catch(e) { stat.innerText = "Camera Denied."; }
+        };
+
+        function phLoop() {
+            if(!isDetecting) return;
+            if(c.width !== v.videoWidth) { c.width = v.videoWidth; c.height = v.videoHeight; }
+            let hazard = false, objName = "";
+            if(v.currentTime !== lastTime) {
+                lastTime = v.currentTime; const res = detector.detectForVideo(v, performance.now()); ctx.clearRect(0,0,c.width,c.height);
+                for(let d of res.detections) {
+                    const cat = d.categories[0].categoryName; const box = d.boundingBox;
+                    if(cat.toLowerCase() === 'cell phone') { hazard=true; objName=cat; ctx.strokeStyle="#ef4444"; ctx.lineWidth=8; ctx.strokeRect(box.originX, box.originY, box.width, box.height); ctx.fillStyle="#ef4444"; ctx.fillRect(box.originX, box.originY-35, 300, 35); ctx.fillStyle="#fff"; ctx.font="bold 20px Inter"; ctx.fillText(`POTHOLE SIM - ${Math.round(d.categories[0].score*100)}%`, box.originX+10, box.originY-10); }
+                    else { ctx.strokeStyle="#22c55e"; ctx.lineWidth=2; ctx.strokeRect(box.originX, box.originY, box.width, box.height); }
+                }
+            }
+            if(hazard) {
+                alertBox.classList.remove('hidden'); alertBox.classList.add('flex'); document.getElementById('ph_camera-container').classList.add('hazard-active');
+                if(alertTimer) clearTimeout(alertTimer);
+                alertTimer = setTimeout(()=>{ alertBox.classList.add('hidden'); alertBox.classList.remove('flex'); document.getElementById('ph_camera-container').classList.remove('hazard-active'); }, 1000);
+                
+                if(Date.now() - lastLog > 10000) {
+                    lastLog = Date.now();
+                    if(navigator.geolocation) navigator.geolocation.getCurrentPosition(async pos => {
+                        let road = "Unknown Route"; try { const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&format=json`); const d = await r.json(); road = d.address.road || d.address.suburb || "Unknown Route"; }catch(e){}
+                        potholeMem.unshift({id: Date.now(), time: new Date().toLocaleTimeString(), road: road, coordinates: `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`}); localStorage.setItem('pothole_database', JSON.stringify(potholeMem)); renderPhMem();
+                    }, () => { potholeMem.unshift({id: Date.now(), time: new Date().toLocaleTimeString(), road: "Simulated Local Road", coordinates: "20.3550, 85.8200"}); localStorage.setItem('pothole_database', JSON.stringify(potholeMem)); renderPhMem(); });
+                }
+            }
+            window.requestAnimationFrame(phLoop);
+        }
+    </script>
+</body>
+</html>
